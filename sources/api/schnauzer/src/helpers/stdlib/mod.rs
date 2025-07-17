@@ -2,7 +2,7 @@ use super::{check_param_count, error, get_param, template_name};
 use base64::Engine;
 use handlebars::{
     handlebars_helper, Context, Handlebars, Helper, HelperDef, Output, RenderContext, RenderError,
-    Renderable,
+    Renderable, ScopedJson,
 };
 use serde::Deserialize;
 use serde_json::value::Value;
@@ -513,70 +513,67 @@ mod test_join_map {
             .unwrap_err();
     }
 }
-
 /// `default` lets you specify the default value for a key in a template in case that key isn't
 /// set.  The first argument is the default (scalar) value; the second argument is the key (with
-/// scalar value) to check and insert if it is set.
-pub fn default(
-    helper: &Helper<'_, '_>,
-    _: &Handlebars,
-    _: &Context,
-    renderctx: &mut RenderContext<'_, '_>,
-    out: &mut dyn Output,
-) -> Result<(), RenderError> {
-    trace!("Starting default helper");
-    let template_name = template_name(renderctx);
-    trace!("Template name: {}", &template_name);
+/// scalar value) to check and insert if it is set. This helper returns the values rather than
+/// rendering them which allows it to be used safely with 'if', e.g. {{#if (default true some.setting)}}
+#[allow(non_camel_case_types)]
+pub struct default;
+impl HelperDef for default {
+    #[allow(unused_assignments)]
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        helper: &Helper<'reg, 'rc>,
+        _: &'reg Handlebars<'reg>,
+        _: &'rc Context,
+        renderctx: &mut RenderContext<'reg, 'rc>,
+    ) -> std::result::Result<ScopedJson<'reg, 'rc>, RenderError> {
+        trace!("Starting default helper");
+        let template_name = template_name(renderctx);
+        trace!("Template name: {}", &template_name);
 
-    trace!("Number of params: {}", helper.params().len());
-    check_param_count(helper, template_name, 2)?;
+        trace!("Number of params: {}", helper.params().len());
+        check_param_count(helper, template_name, 2)?;
 
-    // Pull out the parameters and confirm their types
-    let default_val = get_param(helper, 0)?;
-    let default = match default_val {
-        // these ones Display as their simple scalar selves
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
-        Value::String(s) => s.to_string(),
-        // Null isn't allowed - we're here to give a default!
-        // And composite types are unsupported.
-        Value::Null | Value::Array(_) | Value::Object(_) => {
-            return Err(RenderError::from(
-                error::TemplateHelperError::InvalidTemplateValue {
-                    expected: "non-null scalar",
-                    value: default_val.to_owned(),
-                    template: template_name.to_owned(),
-                },
-            ))
-        }
-    };
-    trace!("Default value if key is not set: {}", default);
+        // Pull out the parameters and confirm their types
+        let default_val = get_param(helper, 0)?;
+        match default_val {
+            // these ones Display as their simple scalar selves
+            Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+            // Null isn't allowed - we're here to give a default!
+            // And composite types are unsupported.
+            Value::Null | Value::Array(_) | Value::Object(_) => {
+                return Err(RenderError::from(
+                    error::TemplateHelperError::InvalidTemplateValue {
+                        expected: "non-null scalar",
+                        value: default_val.to_owned(),
+                        template: template_name.to_owned(),
+                    },
+                ))
+            }
+        };
+        trace!("Default value if key is not set: {}", default_val);
 
-    let requested_value = get_param(helper, 1)?;
-    let value = match requested_value {
-        // these ones Display as their simple scalar selves
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
-        Value::String(s) => s.to_string(),
-        // If no value is set, use the given default.
-        Value::Null => default,
-        // composite types unsupported
-        Value::Array(_) | Value::Object(_) => {
-            return Err(RenderError::from(
-                error::TemplateHelperError::InvalidTemplateValue {
-                    expected: "scalar",
-                    value: requested_value.to_owned(),
-                    template: template_name.to_owned(),
-                },
-            ))
-        }
-    };
+        let requested_value = get_param(helper, 1)?;
+        let value = match requested_value {
+            // these ones Display as their simple scalar selves
+            Value::Bool(_) | Value::Number(_) | Value::String(_) => requested_value,
+            // If no value is set, use the given default.
+            Value::Null => default_val,
+            // composite types unsupported
+            Value::Array(_) | Value::Object(_) => {
+                return Err(RenderError::from(
+                    error::TemplateHelperError::InvalidTemplateValue {
+                        expected: "scalar",
+                        value: requested_value.to_owned(),
+                        template: template_name.to_owned(),
+                    },
+                ))
+            }
+        };
 
-    // Write the string out to the template
-    out.write(&value).context(error::TemplateWriteSnafu {
-        template: template_name.to_owned(),
-    })?;
-    Ok(())
+        Ok(ScopedJson::Derived(value.clone()))
+    }
 }
 
 #[cfg(test)]
