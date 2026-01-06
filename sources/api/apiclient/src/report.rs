@@ -51,6 +51,35 @@ where
     Ok(body)
 }
 
+/// Handles requesting a STIG benchmark report.
+pub async fn get_stig_report<P>(
+    socket_path: P,
+    report_type: &str,
+    format: Option<String>,
+    category: Option<i32>,
+) -> Result<String>
+where
+    P: AsRef<Path>,
+{
+    let method = "GET";
+
+    let mut query: Vec<String> = vec![format!("type={}", report_type)];
+    if let Some(query_format) = format {
+        query.push(format!("format={query_format}"));
+    }
+    if let Some(query_category) = category {
+        query.push(format!("category={query_category}"));
+    }
+
+    let uri = format!("/report/stig?{}", query.join("&"));
+
+    let (_status, body) = crate::raw_request(&socket_path, &uri, method, None)
+        .await
+        .context(error::RequestSnafu { uri, method })?;
+
+    Ok(body)
+}
+
 mod error {
     use snafu::Snafu;
 

@@ -42,7 +42,7 @@ pub struct Arguments {
         short = 'f'
     )]
     pub format: Format,
-    /// the CIS benchmark compliance level to check
+    /// the benchmark compliance level to check
     #[argh(option, default = "1", short = 'l')]
     pub level: u8,
     /// write output to a file at given path [default: stdout]

@@ -1,5 +1,6 @@
 mod checks;
 
+use bloodhound::kubernetes::KUBEPROXY_CONF_FILE;
 use bloodhound::results::*;
 use bloodhound::system_access::NativeSystemAccess;
 use checks::*;

@@ -43,6 +43,7 @@ Source21: bootstrap-commands-toml
 Source22: dbus-1-system.toml
 Source23: br03040101.json
 Source24: k8s04021000.json
+Source25: kubernetes-stig-checks-metadata-json
 
 # 1xx sources: systemd units
 Source100: apiserver.service
@@ -631,6 +632,7 @@ for p in \
   bottlerocket-cis-checks \
   bottlerocket-fips-checks \
   kubernetes-cis-checks \
+  kubernetes-stig-checks \
   shibaken driverdog brush whippet \
 ; do
   install -p -m 0755 %{__cargo_outdir}/${p} %{buildroot}%{_cross_bindir}
@@ -705,6 +707,23 @@ for p in \
 done
 install -m 0644 %{S:13} %{buildroot}%{_cross_libexecdir}/cis-checks/kubernetes/metadata.json
 install -m 0644 %{S:24} %{buildroot}%{_cross_libexecdir}/cis-checks/kubernetes/k8s04021000.json
+
+mkdir -p %{buildroot}%{_cross_libexecdir}/stig-checks/kubernetes
+for p in \
+  k8sstigv242387 k8sstigv242391 k8sstigv242392 k8sstigv242393 \
+  k8sstigv242394 k8sstigv242396 k8sstigv242397 k8sstigv242398 \
+  k8sstigv242399 k8sstigv242404 k8sstigv242406 k8sstigv242407 \
+  k8sstigv242408 k8sstigv242420 k8sstigv242424 k8sstigv242425 \
+  k8sstigv242434 k8sstigv242442 k8sstigv242443 k8sstigv242444 \
+  k8sstigv242447 k8sstigv242448 k8sstigv242449 k8sstigv242450 \
+  k8sstigv242451 k8sstigv242452 k8sstigv242453 k8sstigv242456 \
+  k8sstigv242457 k8sstigv242466 k8sstigv242467 k8sstigv245541 \
+  k8sstigv254801 \
+; do
+  ln -rs %{buildroot}%{_cross_bindir}/kubernetes-stig-checks \
+    %{buildroot}%{_cross_libexecdir}/stig-checks/kubernetes/${p}
+done
+install -m 0644 %{S:25} %{buildroot}%{_cross_libexecdir}/stig-checks/kubernetes/metadata.json
 
 for p in apiclient ; do
   install -p -m 0755 %{__cargo_outdir_static}/${p} %{buildroot}%{_cross_bindir}
@@ -953,6 +972,8 @@ install -p -m 0644 %{S:400} %{S:401} %{S:402} %{buildroot}%{_cross_licensedir}
 %files -n %{_cross_os}bloodhound-k8s
 %{_cross_bindir}/kubernetes-cis-checks
 %{_cross_libexecdir}/cis-checks/kubernetes
+%{_cross_bindir}/kubernetes-stig-checks
+%{_cross_libexecdir}/stig-checks/kubernetes
 
 %files -n %{_cross_os}bloodhound-k8s-overrides
 %{_cross_libexecdir}/cis-checks/bottlerocket/br03040101.json

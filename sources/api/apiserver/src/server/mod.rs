@@ -37,6 +37,7 @@ use tokio::process::Command as AsyncCommand;
 const BLOODHOUND_BIN: &str = "/usr/bin/bloodhound";
 const BLOODHOUND_K8S_CHECKS: &str = "/usr/libexec/cis-checks/kubernetes";
 const BLOODHOUND_FIPS_CHECKS: &str = "/usr/libexec/fips-checks/bottlerocket";
+const BLOODHOUND_STIG_K8S_CHECKS: &str = "/usr/libexec/stig-checks/kubernetes";
 const NETDOG_BIN: &str = "/usr/bin/netdog";
 // =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=   =^..^=
 
@@ -166,7 +167,8 @@ where
                 web::scope("/report")
                     .route("", web::get().to(list_reports))
                     .route("/cis", web::get().to(get_cis_report))
-                    .route("/fips", web::get().to(get_fips_report)),
+                    .route("/fips", web::get().to(get_fips_report))
+                    .route("/stig", web::get().to(get_stig_report)),
             )
     })
     .workers(threads)
@@ -782,6 +784,42 @@ async fn get_fips_report(query: web::Query<HashMap<String, String>>) -> Result<H
     }
 
     cmd.arg("-c").arg(BLOODHOUND_FIPS_CHECKS);
+
+    let output = cmd.output().await.context(error::ReportExecSnafu)?;
+    ensure!(
+        output.status.success(),
+        error::ReportResultSnafu {
+            exit_code: match output.status.code() {
+                Some(code) => code,
+                None => output.status.signal().unwrap_or(1),
+            },
+            stderr: String::from_utf8_lossy(&output.stderr),
+        }
+    );
+    Ok(HttpResponse::Ok()
+        .content_type("application/text")
+        .body(String::from_utf8_lossy(&output.stdout).to_string()))
+}
+
+/// Gets the Bottlerocket STIG benchmark report.
+async fn get_stig_report(query: web::Query<HashMap<String, String>>) -> Result<HttpResponse> {
+    let mut cmd = AsyncCommand::new(BLOODHOUND_BIN);
+
+    // Check for requested category, default is 1
+    if let Some(category) = query.get("category") {
+        cmd.arg("-l").arg(category);
+    }
+
+    // Check for requested format, default is text
+    if let Some(format) = query.get("format") {
+        cmd.arg("-f").arg(format);
+    }
+
+    if let Some(report_type) = query.get("type") {
+        if report_type == "kubernetes" {
+            cmd.arg("-c").arg(BLOODHOUND_STIG_K8S_CHECKS);
+        }
+    }
 
     let output = cmd.output().await.context(error::ReportExecSnafu)?;
     ensure!(

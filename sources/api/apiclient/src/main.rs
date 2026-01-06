@@ -126,6 +126,7 @@ enum UpdateSubcommand {
 enum ReportSubcommand {
     Cis(CisReportArgs),
     CisK8s(CisReportArgs),
+    StigK8s(StigReportArgs),
     Fips(FipsReportArgs),
 }
 
@@ -133,6 +134,13 @@ enum ReportSubcommand {
 #[derive(Debug, PartialEq)]
 struct CisReportArgs {
     level: Option<i32>,
+    format: Option<String>,
+}
+
+/// Stores common user-supplied arguments for the stig report subcommand.
+#[derive(Debug, PartialEq)]
+struct StigReportArgs {
+    category: Option<i32>,
     format: Option<String>,
 }
 
@@ -227,6 +235,7 @@ fn usage() -> ! {
             exec                       Execute a command in a host container.
             report cis                 Retrieve a Bottlerocket CIS benchmark compliance report.
             report cis-k8s             Retrieve a Kubernetes CIS benchmark compliance report.
+            report stig-k8s            Retrieve a Kubernetes STIG benchmark compliance report.
             report fips                Retrieve a FIPS Security Policy compliance report.
             ephemeral-storage init     Initialize ephemeral storage
             ephemeral-storage bind     Bind directories to previously initialized ephemeral storage.
@@ -307,6 +316,10 @@ fn usage() -> ! {
         report cis-k8s options:
             -f, --format               Format of the CIS report (text or json). Default format is text.
             -l, --level                CIS compliance level to report on (1 or 2). Default is 1.
+
+        report stig-k8s options:
+            -f, --format               Format of the STIG report (text or json). Default format is text.
+            -c, --category             STIG category to report on (1 or 2). Default is 1.
 
         ephemeral-storage init options:
             -t, --filesystem           Filesystem to initialize the array as (ext4 or xfs). Default is
@@ -768,6 +781,7 @@ fn parse_report_args(args: Vec<String>) -> Subcommand {
             // Subcommands
             "cis" if subcommand.is_none() && !arg.starts_with('-') => subcommand = Some(arg),
             "cis-k8s" if subcommand.is_none() && !arg.starts_with('-') => subcommand = Some(arg),
+            "stig-k8s" if subcommand.is_none() && !arg.starts_with('-') => subcommand = Some(arg),
             "fips" if subcommand.is_none() && !arg.starts_with('-') => subcommand = Some(arg),
 
             // Other arguments are passed to the subcommand parser
@@ -778,6 +792,7 @@ fn parse_report_args(args: Vec<String>) -> Subcommand {
     let report_type = match subcommand.as_deref() {
         Some("cis") => parse_report_cis_args(subcommand_args),
         Some("cis-k8s") => parse_report_cis_k8s_args(subcommand_args),
+        Some("stig-k8s") => parse_report_stig_k8s_args(subcommand_args),
         Some("fips") => parse_report_fips_args(subcommand_args),
         _ => usage_msg("Missing or unknown subcommand for 'report'"),
     };
@@ -793,6 +808,11 @@ fn parse_report_cis_args(args: Vec<String>) -> ReportSubcommand {
 /// Parses arguments for the 'report' cis-k8s subcommand.
 fn parse_report_cis_k8s_args(args: Vec<String>) -> ReportSubcommand {
     ReportSubcommand::CisK8s(parse_cis_arguments(args))
+}
+
+/// Parses arguments for the 'report' stig-k8s subcommand.
+fn parse_report_stig_k8s_args(args: Vec<String>) -> ReportSubcommand {
+    ReportSubcommand::StigK8s(parse_stig_arguments(args))
 }
 
 fn parse_cis_arguments(args: Vec<String>) -> CisReportArgs {
@@ -824,6 +844,37 @@ fn parse_cis_arguments(args: Vec<String>) -> CisReportArgs {
     }
 
     CisReportArgs { level, format }
+}
+
+fn parse_stig_arguments(args: Vec<String>) -> StigReportArgs {
+    let mut category: Option<i32> = None;
+    let mut format = None;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_ref() {
+            "-c" | "--category" => {
+                let category_str = iter
+                    .next()
+                    .unwrap_or_else(|| usage_msg("Did not give argument to -c | --category"));
+                let category_int = category_str
+                    .parse::<i32>()
+                    .unwrap_or_else(|_| usage_msg("Invalid argument to --c | --category"));
+                category = Some(category_int);
+            }
+
+            "-f" | "--format" => {
+                format = Some(
+                    iter.next()
+                        .unwrap_or_else(|| usage_msg("Did not give argument to -f | --format")),
+                )
+            }
+
+            x => usage_msg(format!("Unknown argument '{x}'")),
+        }
+    }
+
+    StigReportArgs { category, format }
 }
 
 /// Parses arguments for the 'report' fips subcommand.
@@ -1244,6 +1295,21 @@ async fn run() -> Result<()> {
                     "kubernetes",
                     cis_args.format,
                     cis_args.level,
+                )
+                .await
+                .context(error::ReportSnafu)?;
+
+                if !body.is_empty() {
+                    print!("{body}");
+                }
+            }
+
+            ReportSubcommand::StigK8s(stig_args) => {
+                let body = report::get_stig_report(
+                    &args.socket_path,
+                    "kubernetes",
+                    stig_args.format,
+                    stig_args.category,
                 )
                 .await
                 .context(error::ReportSnafu)?;

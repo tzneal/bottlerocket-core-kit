@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use bloodhound::kubernetes::*;
 use bloodhound::system_access::SystemAccess;
 use bloodhound::{
     check_file_not_mode, ensure_file_owner_and_group_root,
@@ -7,13 +8,6 @@ use bloodhound::{
 };
 use libc::{S_IRWXG, S_IRWXO, S_IWGRP, S_IWOTH, S_IXGRP, S_IXOTH, S_IXUSR};
 use serde::Deserialize;
-
-// Bottlerocket doesn't use the standard path for most of these files ¯\_(ツ)_/¯
-const KUBELET_SERVICE_FILE: &str = "/etc/systemd/system/kubelet.service.d/exec-start.conf";
-const KUBELET_KUBECONFIG_FILE: &str = "/etc/kubernetes/kubelet/kubeconfig";
-const KUBELET_CLIENT_CA_FILE: &str = "/etc/kubernetes/pki/ca.crt";
-const KUBELET_CONF_FILE: &str = "/etc/kubernetes/kubelet/config";
-pub const KUBEPROXY_CONF_FILE: &str = "/etc/kubernetes/kube-proxy/kube-proxy.conf";
 
 // =>o.o<= =>o.o<= =>o.o<= =>o.o<= =>o.o<= =>o.o<= =>o.o<= =>o.o<= =>o.o<= =>o.o<=
 
@@ -189,39 +183,7 @@ pub struct K8S04020100Checker {}
 
 impl Checker for K8S04020100Checker {
     fn execute(&self, sac: &dyn SystemAccess) -> CheckerResult {
-        #[derive(Deserialize)]
-        struct Anonymous {
-            enabled: bool,
-        }
-
-        #[derive(Deserialize)]
-        struct Authentication {
-            anonymous: Anonymous,
-        }
-
-        #[derive(Deserialize)]
-        struct KubeletConfig {
-            authentication: Authentication,
-        }
-
-        let mut result = CheckerResult::default();
-
-        if let Ok(kubelet_file) = sac.open(KUBELET_CONF_FILE) {
-            if let Ok(config) = serde_yaml::from_reader::<_, KubeletConfig>(kubelet_file) {
-                if config.authentication.anonymous.enabled {
-                    result.error = "anonymous authentication is configured".to_string();
-                    result.status = CheckStatus::FAIL;
-                } else {
-                    result.status = CheckStatus::PASS;
-                }
-            } else {
-                result.error = "unable to parse kubelet config".to_string()
-            }
-        } else {
-            result.error = format!("unable to read '{KUBELET_CONF_FILE}'");
-        }
-
-        result
+        ensure_kubelet_anonymous_auth_disabled(sac)
     }
 
     fn metadata(&self) -> CheckerMetadata {
@@ -289,42 +251,7 @@ pub struct K8S04020300Checker {}
 
 impl Checker for K8S04020300Checker {
     fn execute(&self, sac: &dyn SystemAccess) -> CheckerResult {
-        #[derive(Deserialize)]
-        struct X509 {
-            #[serde(rename = "clientCAFile")]
-            client_ca_file: String,
-        }
-
-        #[derive(Deserialize)]
-        struct Authentication {
-            x509: X509,
-        }
-
-        #[derive(Deserialize)]
-        struct KubeletConfig {
-            authentication: Authentication,
-        }
-
-        let mut result = CheckerResult::default();
-
-        if let Ok(kubelet_file) = sac.open(KUBELET_CONF_FILE) {
-            if let Ok(config) = serde_yaml::from_reader::<_, KubeletConfig>(kubelet_file) {
-                if !config.authentication.x509.client_ca_file.is_empty()
-                    && sac.exists(&config.authentication.x509.client_ca_file)
-                {
-                    result.status = CheckStatus::PASS;
-                } else {
-                    result.error = "CA file not set to expected path".to_string();
-                    result.status = CheckStatus::FAIL;
-                }
-            } else {
-                result.error = "unable to parse kubelet config".to_string()
-            }
-        } else {
-            result.error = format!("unable to read '{KUBELET_CONF_FILE}'");
-        }
-
-        result
+        ensure_kubelet_client_ca_configured(sac)
     }
 
     fn metadata(&self) -> CheckerMetadata {
@@ -344,30 +271,7 @@ pub struct K8S04020400Checker {}
 
 impl Checker for K8S04020400Checker {
     fn execute(&self, sac: &dyn SystemAccess) -> CheckerResult {
-        #[derive(Deserialize)]
-        struct KubeletConfig {
-            #[serde(rename = "readOnlyPort")]
-            read_only_port: i32,
-        }
-
-        let mut result = CheckerResult::default();
-
-        if let Ok(kubelet_file) = sac.open(KUBELET_CONF_FILE) {
-            if let Ok(config) = serde_yaml::from_reader::<_, KubeletConfig>(kubelet_file) {
-                if config.read_only_port != 0 {
-                    result.error = "Kubelet readOnlyPort not set to 0".to_string();
-                    result.status = CheckStatus::FAIL;
-                } else {
-                    result.status = CheckStatus::PASS;
-                }
-            } else {
-                result.error = "unable to parse kubelet config".to_string()
-            }
-        } else {
-            result.error = format!("unable to read '{KUBELET_CONF_FILE}'");
-        }
-
-        result
+        ensure_kubelet_readonly_port_disabled(sac)
     }
 
     fn metadata(&self) -> CheckerMetadata {
@@ -477,36 +381,11 @@ pub struct K8S04020900Checker {}
 
 impl Checker for K8S04020900Checker {
     fn execute(&self, sac: &dyn SystemAccess) -> CheckerResult {
-        #[derive(Deserialize)]
-        struct KubeletConfig {
-            #[serde(rename = "tlsCertFile")]
-            tls_cert_file: String,
-            #[serde(rename = "tlsPrivateKeyFile")]
-            tls_private_key_file: String,
+        let result = ensure_kubelet_private_key_set(sac);
+        if result.status == CheckStatus::FAIL {
+            return result;
         }
-
-        let mut result = CheckerResult::default();
-
-        if let Ok(kubelet_file) = sac.open(KUBELET_CONF_FILE) {
-            if let Ok(config) = serde_yaml::from_reader::<_, KubeletConfig>(kubelet_file) {
-                if (!config.tls_cert_file.is_empty() && sac.exists(&config.tls_cert_file))
-                    && (!config.tls_private_key_file.is_empty()
-                        && sac.exists(&config.tls_private_key_file))
-                {
-                    result.status = CheckStatus::PASS;
-                } else {
-                    result.error = "TLS files not set to expected path".to_string();
-                    result.status = CheckStatus::FAIL;
-                }
-            } else {
-                // If certs not provided then `serverTLSBootstrap` will be used. Deserialization expected to fail in this case.
-                result.status = CheckStatus::PASS;
-            }
-        } else {
-            result.error = format!("unable to read '{KUBELET_CONF_FILE}'");
-        }
-
-        result
+        ensure_kubelet_private_cert_set(sac)
     }
 
     fn metadata(&self) -> CheckerMetadata {

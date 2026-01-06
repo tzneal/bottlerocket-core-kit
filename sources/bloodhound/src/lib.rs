@@ -3,6 +3,7 @@ use std::io::{self, BufRead, BufReader};
 use system_access::SystemAccess;
 
 pub mod args;
+pub mod kubernetes;
 pub mod output;
 pub mod results;
 pub mod system_access;

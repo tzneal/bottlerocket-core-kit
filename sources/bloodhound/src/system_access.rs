@@ -169,9 +169,9 @@ impl SystemAccess for UnitTestSystemAccess {
     }
 
     fn walk_dir(&self, path: &str) -> Box<dyn Iterator<Item = DirEntry> + '_> {
-        let prefix = path.to_string();
+        let prefix = PathBuf::from(path);
         Box::new(self.metadata.iter().filter_map(move |(p, m)| {
-            if p.starts_with(&prefix) {
+            if Path::new(p).starts_with(&prefix) {
                 Some(DirEntry {
                     path: PathBuf::from(p),
                     metadata: m.clone(),
