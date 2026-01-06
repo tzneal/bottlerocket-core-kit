@@ -1,8 +1,6 @@
 use bloodhound::results::{CheckStatus, Checker, CheckerMetadata, CheckerResult, Mode};
 use bloodhound::*;
-use std::os::unix::fs::PermissionsExt;
 use system_access::SystemAccess;
-use walkdir::WalkDir;
 
 const PROC_MODULES_FILE: &str = "/proc/modules";
 const PROC_CMDLINE_FILE: &str = "/proc/cmdline";
@@ -882,30 +880,20 @@ impl Checker for BR04010101Checker {
 pub struct BR04010200Checker {}
 
 impl Checker for BR04010200Checker {
-    fn execute(&self, _: &dyn SystemAccess) -> CheckerResult {
-        // Default the result to report success
-        let mut result = {
-            CheckerResult {
-                status: CheckStatus::PASS,
-                ..Default::default()
-            }
+    fn execute(&self, sac: &dyn SystemAccess) -> CheckerResult {
+        let mut result = CheckerResult {
+            status: CheckStatus::PASS,
+            ..Default::default()
         };
 
-        // Recursively walk over all files in /var/log/journal and check perms
-        for file in WalkDir::new("/var/log/journal")
-            .into_iter()
-            .filter_map(|file| file.ok())
-        {
-            if let Ok(metadata) = file.metadata() {
-                if !metadata.is_file() {
-                    continue;
-                }
-
-                if (metadata.permissions().mode() & 0b111) > 0 {
-                    result.error = format!("file {:?} has permissions for 'other'", file.path());
-                    result.status = CheckStatus::FAIL;
-                    break;
-                }
+        for entry in sac.walk_dir("/var/log/journal") {
+            if !entry.metadata.is_file() {
+                continue;
+            }
+            if (entry.metadata.mode & 0b111) > 0 {
+                result.error = format!("file {:?} has permissions for 'other'", entry.path);
+                result.status = CheckStatus::FAIL;
+                break;
             }
         }
 
@@ -2018,5 +2006,74 @@ mod tests {
         let checker = BR04010101Checker {};
         let result = checker.execute(&sac);
         assert_eq!(result.status, CheckStatus::SKIP);
+    }
+
+    // BR04010200Checker tests - journal file permissions
+    #[test]
+    pub fn test_br04010200checker_pass() {
+        let mut sac = UnitTestSystemAccess::default();
+        sac.register_file_with_metadata(
+            "/var/log/journal/system.journal",
+            "",
+            libc::S_IFREG | 0o640,
+            0,
+            0,
+        );
+        sac.register_file_with_metadata(
+            "/var/log/journal/user.journal",
+            "",
+            libc::S_IFREG | 0o600,
+            0,
+            0,
+        );
+        let checker = BR04010200Checker {};
+        let result = checker.execute(&sac);
+        assert_eq!(result.status, CheckStatus::PASS);
+    }
+
+    #[test]
+    pub fn test_br04010200checker_fail_other_readable() {
+        let mut sac = UnitTestSystemAccess::default();
+        sac.register_file_with_metadata(
+            "/var/log/journal/system.journal",
+            "",
+            libc::S_IFREG | 0o644,
+            0,
+            0,
+        );
+        let checker = BR04010200Checker {};
+        let result = checker.execute(&sac);
+        assert_eq!(result.status, CheckStatus::FAIL);
+    }
+
+    #[test]
+    pub fn test_br04010200checker_fail_other_writable() {
+        let mut sac = UnitTestSystemAccess::default();
+        sac.register_file_with_metadata(
+            "/var/log/journal/system.journal",
+            "",
+            libc::S_IFREG | 0o642,
+            0,
+            0,
+        );
+        let checker = BR04010200Checker {};
+        let result = checker.execute(&sac);
+        assert_eq!(result.status, CheckStatus::FAIL);
+    }
+
+    #[test]
+    pub fn test_br04010200checker_skips_directories() {
+        let mut sac = UnitTestSystemAccess::default();
+        // Directory with 'other' permissions should be skipped
+        sac.register_file_with_metadata(
+            "/var/log/journal/subdir",
+            "",
+            libc::S_IFDIR | 0o755,
+            0,
+            0,
+        );
+        let checker = BR04010200Checker {};
+        let result = checker.execute(&sac);
+        assert_eq!(result.status, CheckStatus::PASS);
     }
 }

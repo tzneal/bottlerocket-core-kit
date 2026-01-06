@@ -3,10 +3,18 @@ use std::fs::File;
 use std::io::{ErrorKind, Seek, SeekFrom, Write};
 use std::os::linux::fs::MetadataExt;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::{fs, io};
 use tempfile::tempfile;
+use walkdir::WalkDir;
+
+/// Entry returned by walk_dir, containing path and metadata
+#[derive(Clone, Debug)]
+pub struct DirEntry {
+    pub path: PathBuf,
+    pub metadata: FileMetadata,
+}
 
 /// The SystemAccess trait allows for plumbing in host system access during execution of checks. It
 /// exists solely to make is possible to unit tests checks.
@@ -19,6 +27,8 @@ pub trait SystemAccess {
     fn exists(&self, path: &str) -> bool;
     /// command_output returns the output of running the specified command with the suppplied arguments
     fn command_output(&self, cmd: &str, args: &[&str]) -> io::Result<Output>;
+    /// walk_dir returns an iterator over all entries in a directory tree
+    fn walk_dir(&self, path: &str) -> Box<dyn Iterator<Item = DirEntry> + '_>;
 }
 
 /// FileMetadata is the subset of file metadata used in checks. The standard fs::Metadata type can't
@@ -28,6 +38,15 @@ pub struct FileMetadata {
     pub uid: u32,
     pub gid: u32,
     pub mode: u32,
+}
+
+impl FileMetadata {
+    pub fn is_file(&self) -> bool {
+        (self.mode & libc::S_IFMT) == libc::S_IFREG
+    }
+    pub fn is_dir(&self) -> bool {
+        (self.mode & libc::S_IFMT) == libc::S_IFDIR
+    }
 }
 
 /// NativeSystemAccess provides access to the host system.
@@ -49,6 +68,20 @@ impl SystemAccess for NativeSystemAccess {
     }
     fn command_output(&self, cmd: &str, args: &[&str]) -> io::Result<Output> {
         Command::new(cmd).args(args).output()
+    }
+    fn walk_dir(&self, path: &str) -> Box<dyn Iterator<Item = DirEntry> + '_> {
+        Box::new(WalkDir::new(path).into_iter().filter_map(|e| {
+            let e = e.ok()?;
+            let m = e.metadata().ok()?;
+            Some(DirEntry {
+                path: e.path().to_path_buf(),
+                metadata: FileMetadata {
+                    uid: m.st_uid(),
+                    gid: m.st_gid(),
+                    mode: m.permissions().mode(),
+                },
+            })
+        }))
     }
 }
 
@@ -133,5 +166,19 @@ impl SystemAccess for UnitTestSystemAccess {
                 "No such file or directory",
             ))?;
         Ok(output.clone())
+    }
+
+    fn walk_dir(&self, path: &str) -> Box<dyn Iterator<Item = DirEntry> + '_> {
+        let prefix = path.to_string();
+        Box::new(self.metadata.iter().filter_map(move |(p, m)| {
+            if p.starts_with(&prefix) {
+                Some(DirEntry {
+                    path: PathBuf::from(p),
+                    metadata: m.clone(),
+                })
+            } else {
+                None
+            }
+        }))
     }
 }
